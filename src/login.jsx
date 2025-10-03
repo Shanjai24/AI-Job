@@ -1,43 +1,61 @@
-import {Box,Button,IconButton,TextField,Typography,InputAdornment} from "@mui/material";
+import {Box,Button,IconButton,TextField,Typography,InputAdornment,RadioGroup, FormControlLabel, Radio } from "@mui/material";
 import gog from "./assets/google.png";
 import stu from "./assets/stu.png";
 import { Visibility, VisibilityOff } from "@mui/icons-material";
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { auth } from "./firebase";
-import { signInWithGoogle } from "./firebase";
-import CloseIcon from '@mui/icons-material/Close';
 
 
 export default function Login() {
   const [open, setOpen] = useState(false);
+  const [role, setRole] = useState("Student");
 
   const[email,setEmail] = useState('');
   const[password,setPassword] = useState('');
-  const[Eerr,setEerr] = useState('');
-  const nav = useNavigate();
+  const[loading,setLoading] = useState(false);
+  const[message,setMessage] = useState("");
 
-  const submit = async(e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    try{
-      await auth.signInWithEmailAndPassword(email,password);
-      console.log(email + " " + password);
-      nav("/dashboard",{state:{email}})
-    }catch(err){
-      if(err.code === "auth/invalid-credential"){
-          setEerr("Invalid Email or Password");
-      }
-      console.error(err);
+    setMessage("");
+    if (!email || !password) {
+      setMessage("Please enter email and password");
+      return;
     }
-  }
-  const signgoogle = async(e) => {
-    e.preventDefault();
-    const result = await signInWithGoogle();
-    const user = result.user;
+    try {
+      setLoading(true);
+      // derive a display name from email (before '@') if none provided
+      const derivedName = email.includes('@') ? email.split('@')[0] : email;
+      const res = await fetch("http://localhost:3000/api/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email, password, name: derivedName, role }),
+      });
+      
+      const data = await res.json();
+      
+      if (!res.ok) {
+        setMessage(data?.message || "Login failed");
+        return;
+      }
+      
+      // Save token and user data to localStorage
+      localStorage.setItem('token', data.token);
+      localStorage.setItem('user', JSON.stringify(data.user));
+      
+      // Redirect to a single dashboard route
+      window.location.href = '/dashboard';
+      
+    } catch (err) {
+      console.error('Login error:', err);
+      setMessage("Network error. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    console.log("Google user:", user);
-    nav("/dashboard", { state: { email: user.email } });
-  }
+
   return (
     <Box
       style={{
@@ -76,27 +94,19 @@ export default function Login() {
           <Typography sx={{ fontWeight: "bold", fontSize: "20px" }}>
             Login to SkillConnect
           </Typography>
-          {Eerr && (
-            <Box
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                border: '1px solid black',
-                backgroundColor: '#f2f6e7ff',  
-                p:'2px',     
-                fontSize: '12px',
-                mt:'10px',
-              }}
-            >
-              <CloseIcon
-                fontSize="small"
-                sx={{ cursor: 'pointer',mr:'6px'}}
-                onClick={() => setEerr("")}
-              />
-              <Typography sx={{ fontSize: '12px' }}>{Eerr}</Typography>
+          <Box component="form" onSubmit={handleSubmit} sx={{ width: "80%", display: "flex", flexDirection: "column", gap: 1,mt:'40px'}}>
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 1,mt:'30px'}}>
+              <Typography sx={{fontWeight:'bold'}}>UserType</Typography>
+                <RadioGroup 
+                  row 
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
+                  sx={{display:'flex', gap:10}}
+                >
+                  <FormControlLabel value="Student" control={<Radio size="small" />} label="Student" />
+                  <FormControlLabel value="Hr" control={<Radio size="small" />} label="HR" />
+                </RadioGroup>
             </Box>
-          )}
-          <Box sx={{ width: "80%", display: "flex", flexDirection: "column", gap: 1,mt:'40px'}}>
             <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
               <Typography>Username</Typography>
               <TextField placeholder="Username" size="small" fullWidth
@@ -139,18 +149,23 @@ export default function Login() {
               </Box>
             </Box>
             <Button
+              type="submit"
               sx={{ mt: 1, backgroundColor: "#2f5ea8", textTransform: "none" }}
-              onClick={submit}
+              disabled={loading}
             >
-              <Typography sx={{ color: "white" }}>Login</Typography>
+              <Typography sx={{ color: "white" }}>{loading ? "Logging in..." : "Login"}</Typography>
             </Button>
+            {message && (
+              <Typography sx={{ mt: 1, color: message.startsWith("User saved") ? "green" : "crimson" }}>
+                {message}
+              </Typography>
+            )}
             <Typography
               sx={{ display: "flex", mt: "2px", justifyContent: "center" }}
             >
               ------or-----
             </Typography>
             <Button
-            onClick={signgoogle}
               sx={{ mt: 1, border: "1px solid black", textTransform: "none" }}
             >
               <img src={gog} alt="google" height="20px" />
@@ -159,11 +174,6 @@ export default function Login() {
               </Typography>
             </Button>
           </Box>
-
-          <Typography sx={{fontSize:'12px',mt:'25px',}}>
-            Don't have an account? Create a new one <Link to="/">Sign up</Link>
-          </Typography>
-
         </Box>
     </Box>
   );

@@ -1,4 +1,4 @@
-import { Box,Typography } from "@mui/material";
+import { Box, Typography,Stack,Container} from "@mui/material";
 import logo from './assets/logo.png';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import AssessmentIcon from '@mui/icons-material/Assessment';
@@ -6,36 +6,55 @@ import AssignmentIcon from '@mui/icons-material/Assignment';
 import LogoutIcon from '@mui/icons-material/Logout';
 import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 import './App.css';
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import NotificationsNoneRoundedIcon from '@mui/icons-material/NotificationsNoneRounded';
 import ContrastRoundedIcon from '@mui/icons-material/ContrastRounded';
 import NightlightRoundedIcon from '@mui/icons-material/NightlightRounded';
-import { db,auth } from "./firebase";
-import { useNavigate } from "react-router-dom";
 
 export default function Dashboard() {
-  const[click,setClick] = useState("Dashboard");
-  const[theme,setTheme] = useState(false);
+  const [click, setClick] = useState("Dashboard");
+  const [theme, setTheme] = useState(false);
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
+
   const dark = () => {
     setTheme((prev) => !prev);
   };
-  const nav = useNavigate();
-  const logout = async () => {
-    await auth.signOut();
-    nav("/login");
-  }
-  const email = auth.currentUser?.email || "";
-  const name = email.split("@")[0];
-  const[role,setRole] = useState("");
+
   useEffect(() => {
-    const roleshow = auth.onAuthStateChanged(async (user) => {
-      const doc = await db.collection("users").doc(user.uid).get();
-      if (doc.exists) {
-        setRole(doc.data().role);
+    const fetchProfile = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) {
+          window.location.href = '/login';
+          return;
+        }
+        const res = await fetch('http://localhost:3000/api/profile', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.status === 401) {
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          window.location.href = '/login';
+          return;
+        }
+        const data = await res.json();
+        setProfile(data);
+      } catch (e) {
+        console.error('Profile fetch error:', e);
+      } finally {
+        setLoading(false);
       }
-    })
-    return () => roleshow();
-  })
+    };
+    fetchProfile();
+  }, []);
+
+  const logout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    window.location.href = '/login';
+  };
+  
   return (
     <Box sx={{display:'flex',flexDirection:'row'}}>
       <Box sx={{ width: "10%", backgroundColor: theme == true ? "#394256ff" : "#cfe0f1ff",display:'flex',flexDirection:'column',height:'100vh'}}>
@@ -60,7 +79,7 @@ export default function Dashboard() {
           ))}
         </Box>
         <Box sx={{display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',mt:'auto',mb:'10px',gap:'20px'}}>
-          <LogoutIcon sx={{cursor:'pointer',color:'red'}} onClick={logout}/>
+          <LogoutIcon onClick={logout} sx={{cursor:'pointer',color:'red'}}/>
           <p>-------------------</p>
           <AccountCircleIcon sx={{cursor:'pointer',fontSize:40}}/>
         </Box>
@@ -78,10 +97,6 @@ export default function Dashboard() {
           }}
         >
           <Typography sx={{ fontWeight:'bold',fontSize:20 }}>{click}</Typography>
-          <Typography sx={{display:'flex',fontWeight:'bold',alignItems:'center',justifyContent:'center',textAlign:'center',height:'100vh',width:'100%'}}>
-            <span style={{textTransform:'capitalize',marginRight:'10px'}}>{role}</span>
-            portal 
-          </Typography>
           <Box sx={{display:'flex',ml: "auto", cursor: "pointer",pr:'100px',gap:'20px'}}>
             <NotificationsNoneRoundedIcon/>
             {theme ? (
@@ -91,8 +106,14 @@ export default function Dashboard() {
             )}
           </Box>
         </Box>
-        <Box sx={{ flexGrow: 1, backgroundColor: theme == true ? "black" : "#f0f0f0", p: 2 }}>
-          <Typography sx={{fontWeight:'bold', color: theme == true ? "white" : "black"}}>Welcome {name},</Typography>
+        <Box sx={{ flexGrow: 1, backgroundColor: theme ? '#0B1220' : '#f7f9fc', py: { xs: 2, md: 3 } }}>
+          <Container maxWidth="lg">
+            <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2} sx={{ mb: 2 }}>
+              <Typography sx={{ fontWeight: 700, color: theme ? "#E2E8F0" : "#0F172A", fontSize: 22 }}>
+                {loading ? 'Loading...' : `Welcome, ${profile?.name || profile?.email || ''}`}
+              </Typography>
+            </Stack>
+          </Container>
         </Box>
       </Box>
     </Box>
