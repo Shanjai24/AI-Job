@@ -123,5 +123,15 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
   }
 });
 
+app.delete('/api/delete-account', authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.user;
+    await pool.query('DELETE FROM users WHERE id = ?', [userId]);
+    return res.json({ message: 'Account deleted successfully' });
+  } catch (error) {
+    console.error('Delete account error:', error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+});
 
 startServer();
