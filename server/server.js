@@ -4,13 +4,36 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import multer from 'multer';
+import FormData from 'form-data';
+import fetch from 'node-fetch';
+import fs from 'fs';
+import path from 'path';
 
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ML API Configuration
+const ML_API_URL = process.env.ML_API_URL || 'http://localhost:8000';
+
 app.use(cors());
 app.use(express.json());
+
+// Configure multer for file uploads
+const upload = multer({ 
+  dest: 'uploads/',
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['.pdf', '.docx', '.doc'];
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (allowedTypes.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only PDF and DOCX allowed.'));
+    }
+  }
+});
 
 let pool;
 
@@ -39,6 +62,38 @@ async function startServer() {
     )
   `);
   console.log('✅ Ensured users table exists');
+
+  // Create resume uploads table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS resume_uploads (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      job_role VARCHAR(255) NOT NULL,
+      job_description TEXT,
+      total_resumes INT NOT NULL,
+      required_candidates INT NOT NULL,
+      upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  console.log('✅ Ensured resume_uploads table exists');
+
+  // Create candidates table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS candidates (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      upload_id INT NOT NULL,
+      filename VARCHAR(255) NOT NULL,
+      score DECIMAL(5,2) NOT NULL,
+      semantic_score DECIMAL(5,2),
+      feature_score DECIMAL(5,2),
+      matched_skills TEXT,
+      rank_position INT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (upload_id) REFERENCES resume_uploads(id) ON DELETE CASCADE
+    )
+  `);
+  console.log('✅ Ensured candidates table exists');
 
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
@@ -130,6 +185,202 @@ app.delete('/api/delete-account', authenticateToken, async (req, res) => {
     return res.json({ message: 'Account deleted successfully' });
   } catch (error) {
     console.error('Delete account error:', error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// NEW: Resume upload and ML matching endpoint
+app.post('/api/match-resumes', authenticateToken, upload.array('files', 20), async (req, res) => {
+  try {
+    const { userId } = req.user;
+    const { jobRole, jobDescription, requiredSkills, minEducation, minExperience, topN } = req.body;
+    const files = req.files;
+
+    // Validate input
+    if (!files || files.length < 5 || files.length > 20) {
+      // Clean up uploaded files
+      files?.forEach(file => fs.unlinkSync(file.path));
+      return res.status(400).json({ message: 'Please upload between 5 and 20 resumes' });
+    }
+
+    if (!jobRole || !jobDescription) {
+      files.forEach(file => fs.unlinkSync(file.path));
+      return res.status(400).json({ message: 'Job role and description are required' });
+    }
+
+    // Prepare data for ML API
+    const formData = new FormData();
+    
+    // Append files
+    files.forEach(file => {
+      formData.append('files', fs.createReadStream(file.path), file.originalname);
+    });
+
+    // Prepare job requirements
+    const jobRequirements = {
+      required_skills: requiredSkills ? requiredSkills.split(',').map(s => s.trim().toLowerCase()) : [],
+      min_education_level: parseInt(minEducation) || 0,
+      min_experience: parseInt(minExperience) || 0
+    };
+
+    formData.append('job_description', jobDescription);
+    formData.append('job_requirements', JSON.stringify(jobRequirements));
+    formData.append('top_n', topN || 5);
+
+    // Call ML API
+    console.log('Calling ML API...');
+    const mlResponse = await fetch(`${ML_API_URL}/api/match-resumes`, {
+      method: 'POST',
+      body: formData,
+      headers: formData.getHeaders()
+    });
+
+    if (!mlResponse.ok) {
+      throw new Error(`ML API error: ${mlResponse.statusText}`);
+    }
+
+    const mlResults = await mlResponse.json();
+
+    // Save to database
+    const [uploadResult] = await pool.query(
+      `INSERT INTO resume_uploads (user_id, job_role, job_description, total_resumes, required_candidates) 
+       VALUES (?, ?, ?, ?, ?)`,
+      [userId, jobRole, jobDescription, mlResults.total_resumes, parseInt(topN) || 5]
+    );
+
+    const uploadId = uploadResult.insertId;
+
+    // Save top candidates
+    for (let i = 0; i < mlResults.top_candidates.length; i++) {
+      const candidate = mlResults.top_candidates[i];
+      await pool.query(
+        `INSERT INTO candidates (upload_id, filename, score, semantic_score, feature_score, matched_skills, rank_position)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          uploadId,
+          candidate.filename,
+          candidate.score,
+          candidate.semantic_score,
+          candidate.feature_score,
+          JSON.stringify(candidate.matched_skills),
+          i + 1
+        ]
+      );
+    }
+
+    // Clean up uploaded files
+    files.forEach(file => {
+      try {
+        fs.unlinkSync(file.path);
+      } catch (err) {
+        console.error('Error deleting file:', err);
+      }
+    });
+
+    return res.json({
+      success: true,
+      uploadId: uploadId,
+      results: mlResults
+    });
+
+  } catch (error) {
+    console.error('Match resumes error:', error);
+    // Clean up files on error
+    if (req.files) {
+      req.files.forEach(file => {
+        try {
+          fs.unlinkSync(file.path);
+        } catch (err) {}
+      });
+    }
+    return res.status(500).json({ message: 'Error processing resumes', error: error.message });
+  }
+});
+
+// Get user's upload history
+app.get('/api/upload-history', authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.user;
+    const [uploads] = await pool.query(
+      `SELECT id, job_role, total_resumes, required_candidates, upload_date 
+       FROM resume_uploads 
+       WHERE user_id = ? 
+       ORDER BY upload_date DESC 
+       LIMIT 10`,
+      [userId]
+    );
+    return res.json(uploads);
+  } catch (error) {
+    console.error('Upload history error:', error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// Get candidates for a specific upload
+app.get('/api/candidates/:uploadId', authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.user;
+    const { uploadId } = req.params;
+
+    // Verify upload belongs to user
+    const [uploads] = await pool.query(
+      'SELECT * FROM resume_uploads WHERE id = ? AND user_id = ?',
+      [uploadId, userId]
+    );
+
+    if (uploads.length === 0) {
+      return res.status(404).json({ message: 'Upload not found' });
+    }
+
+    const [candidates] = await pool.query(
+      `SELECT * FROM candidates WHERE upload_id = ? ORDER BY rank_position`,
+      [uploadId]
+    );
+
+    return res.json({
+      upload: uploads[0],
+      candidates: candidates.map(c => ({
+        ...c,
+        matched_skills: JSON.parse(c.matched_skills)
+      }))
+    });
+  } catch (error) {
+    console.error('Get candidates error:', error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// Get dashboard stats
+app.get('/api/dashboard-stats', authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.user;
+
+    const [totalUploads] = await pool.query(
+      'SELECT COUNT(*) as count FROM resume_uploads WHERE user_id = ?',
+      [userId]
+    );
+
+    const [totalCandidates] = await pool.query(
+      `SELECT COUNT(*) as count FROM candidates c
+       JOIN resume_uploads r ON c.upload_id = r.id
+       WHERE r.user_id = ?`,
+      [userId]
+    );
+
+    const [avgScore] = await pool.query(
+      `SELECT AVG(score) as avg_score FROM candidates c
+       JOIN resume_uploads r ON c.upload_id = r.id
+       WHERE r.user_id = ?`,
+      [userId]
+    );
+
+    return res.json({
+      totalUploads: totalUploads[0].count,
+      totalCandidates: totalCandidates[0].count,
+      avgScore: avgScore[0].avg_score ? Math.round(avgScore[0].avg_score) : 0
+    });
+  } catch (error) {
+    console.error('Dashboard stats error:', error);
     return res.status(500).json({ message: 'Internal server error' });
   }
 });
