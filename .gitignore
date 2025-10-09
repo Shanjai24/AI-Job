@@ -7,6 +7,7 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Node
 node_modules
 dist
 dist-ssr
@@ -22,3 +23,42 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.mypy_cache/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+ml/venv/
+
+# Env files
+.env
+.env.*
+
+# Build/test caches
+coverage/
+.cache/
+build/
+
+# OS
+Thumbs.db
+
+# ML artifacts and datasets (adjust as needed)
+ml/__pycache__/
+ml/data/
+ml/datasets/
+ml/models/
+ml/checkpoints/
+ml/*.bin
+ml/*.pt
+ml/*.pth
+ml/*.pkl
+ml/*.h5
+ml/*.onnx
